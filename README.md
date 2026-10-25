@@ -67,6 +67,18 @@ requested frame rate. The optional `camera` and `render_config` operations only
 affect this read-only stream; they never mutate the authoritative simulation
 state.
 
+The fork's optional BAM adapters and lateral-policy diagnostic/training tools
+also live under `sim/visualization` in separate modules. `physics.py` contains
+the world/body integration and `lateral/` contains the extra task, trainer and
+validator. All added files, including the extension scene, docs and tests, live
+under that directory; no fork-only compatibility wrappers remain elsewhere.
+Run the trainer/validator with `python -m mjlab_microduck.sim.visualization.lateral.finetune`
+or `python -m mjlab_microduck.sim.visualization.lateral.validate`. Existing
+upstream robot XML and mesh assets remain in their model directory. See
+[the extension layout](src/mjlab_microduck/sim/visualization/README.md) for the
+module boundaries. Moving the code does not change XML defaults, model weights
+or the read-only rendering contract.
+
 Resume from a checkpoint:
 
 ```bash
@@ -226,6 +238,16 @@ uv run publish --onnx output.onnx --repo <user>/microduck-flamingo \
 # A new gait for a slot
 uv run publish --onnx output.onnx --repo <user>/microduck-my-walk --kind perpetual --slot walk
 
+# Ship a rollout video too: uploaded as replay.mp4, which the Hub's replay widget plays
+uv run scripts/render_policy.py output.onnx --seconds 10 --video media/bow.mp4
+uv run publish --onnx output.onnx --repo <user>/microduck-bow --kind episodic --duration-s 4.0 \
+    --video media/bow.mp4
+
+# A remix (warm-started / fine-tuned from someone's published policy): name the parent so the
+# model card sets `base_model` and the Hub links the two
+uv run publish --onnx output.onnx --repo <user>/microduck-deep-bow --kind episodic --duration-s 5.0 \
+    --base-model <owner>/microduck-polite-bow
+
 # See what would be uploaded without touching the Hub
 uv run publish --onnx output.onnx --repo <user>/microduck-bow --kind episodic --duration-s 4.0 --dry-run
 ```
@@ -279,5 +301,9 @@ joint-index mappings, reward sign conventions, and NaN guards.
 
 ## License
 
-This project is licensed under the Apache 2.0 License. See the [LICENSE](LICENSE) file for details.
-3D model files are licensed under Creative Commons BY-SA-NC.
+The code in this repository is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+
+The 3D model files (the `.stl` meshes in `src/mjlab_microduck/robot/microduck/assets/`
+and `src/mjlab_microduck/robot/xl330_test_bench/assets/`) are licensed under
+[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+See [LICENSE-MODELS.md](LICENSE-MODELS.md) for the exact scope and attribution.
