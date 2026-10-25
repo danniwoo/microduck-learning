@@ -144,24 +144,28 @@ DEFAULT_POSE = np.array([
 class TerminalInput:
     """Single-keypress reader on stdin (cbreak mode, background thread).
 
-    Replaces the MuJoCo viewer key_callback: keypresses in the viewer window
+    By default replaces the MuJoCo viewer key_callback: keypresses in the viewer window
     also fire the viewer's built-in visualization shortcuts (frames, labels,
     rendering toggles…), so commands are read from the terminal instead.
     Arrow keys arrive as ESC [ A/B/C/D escape sequences and are translated to
     symbolic names ("up"/"down"/"left"/"right"); letters are lowercased.
     cbreak (not raw) mode keeps ISIG enabled, so Ctrl+C still works.
+    Optional viewer mode queues arrow/space events without touching stdin.
     """
 
     _ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 
-    def __init__(self):
+    def __init__(self, viewer_keys=False):
         self._queue = queue.Queue()
-        self.enabled = sys.stdin.isatty()
+        self.viewer_keys = viewer_keys
+        self.enabled = not viewer_keys and sys.stdin.isatty()
         self._fd = sys.stdin.fileno() if self.enabled else -1
         self._old_attrs = None
         self._stop = threading.Event()
 
     def __enter__(self):
+        if self.viewer_keys:
+            return self
         if not self.enabled:
             print("WARNING: stdin is not a TTY — keyboard control disabled")
             return self
@@ -199,6 +203,13 @@ class TerminalInput:
                 continue  # bare ESC / unknown sequence: ignore
             self._queue.put(ch.lower() if ch.isalpha() else ch)
 
+    def on_viewer_key(self, keycode):
+        # GLFW arrows and space avoid the viewer's letter visualization shortcuts.
+        # Queue events: policy/physics mutations belong to the simulation thread.
+        key = {265: "up", 264: "down", 263: "a", 262: "e", 32: " "}.get(keycode)
+        if key is not None:
+            self._queue.put(key)
+
     def get_keys(self):
         """Drain and return all pending keys (symbolic names / characters)."""
         keys = []
@@ -207,6 +218,16 @@ class TerminalInput:
                 keys.append(self._queue.get_nowait())
             except queue.Empty:
                 return keys
+
+
+def create_policy_session(path):
+    """Small single-robot policies need no spinning CPU worker pools."""
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    return ort.InferenceSession(path, sess_options=options, providers=["CPUExecutionProvider"])
 
 
 class PolicyInference:
@@ -237,7 +258,7 @@ class PolicyInference:
         self.default_gait_period_from_onnx = None
         if walking_onnx_path:
             print(f"Loading walking policy from: {walking_onnx_path}")
-            self.walking_session = ort.InferenceSession(walking_onnx_path)
+            self.walking_session = create_policy_session(walking_onnx_path)
             w_input_shape = self.walking_session.get_inputs()[0].shape
             w_output_shape = self.walking_session.get_outputs()[0].shape
             print(f"Walking policy input: {self.walking_session.get_inputs()[0].name}, shape: {w_input_shape}")
@@ -256,7 +277,7 @@ class PolicyInference:
         self.standing_session = None
         if standing_onnx_path:
             print(f"\nLoading standing policy from: {standing_onnx_path}")
-            self.standing_session = ort.InferenceSession(standing_onnx_path)
+            self.standing_session = create_policy_session(standing_onnx_path)
             s_input_shape = self.standing_session.get_inputs()[0].shape
             s_output_shape = self.standing_session.get_outputs()[0].shape
             print(f"Standing policy input: {self.standing_session.get_inputs()[0].name}, shape: {s_input_shape}")
@@ -271,7 +292,7 @@ class PolicyInference:
         self.ground_pick_period = ground_pick_period
         if ground_pick_onnx_path:
             print(f"\nLoading ground pick policy from: {ground_pick_onnx_path}")
-            self.ground_pick_session = ort.InferenceSession(ground_pick_onnx_path)
+            self.ground_pick_session = create_policy_session(ground_pick_onnx_path)
             gp_input_shape = self.ground_pick_session.get_inputs()[0].shape
             print(f"Ground pick policy input shape: {gp_input_shape}")
 
@@ -289,7 +310,7 @@ class PolicyInference:
             raise ValueError("Provide only one of --sit / --sitstand")
         if sit_onnx_path:
             print(f"\nLoading sit policy from: {sit_onnx_path}")
-            self.sit_session = ort.InferenceSession(sit_onnx_path)
+            self.sit_session = create_policy_session(sit_onnx_path)
             sit_input_shape = self.sit_session.get_inputs()[0].shape
             print(f"Sit policy input shape: {sit_input_shape}")
         elif sitstand_onnx_path:
@@ -298,7 +319,7 @@ class PolicyInference:
                     "--sitstand policies use the unified 13D command obs (61D); run with --new-cmd-obs"
                 )
             print(f"\nLoading sitstand policy from: {sitstand_onnx_path}")
-            self.sit_session = ort.InferenceSession(sitstand_onnx_path)
+            self.sit_session = create_policy_session(sitstand_onnx_path)
             self.is_sitstand = True
             ss_input_shape = self.sit_session.get_inputs()[0].shape
             print(f"Sitstand policy input shape: {ss_input_shape}")
@@ -308,7 +329,7 @@ class PolicyInference:
         self.slope_mode = False
         if slope_onnx_path:
             print(f"\nLoading slope policy from: {slope_onnx_path}")
-            self.slope_session = ort.InferenceSession(slope_onnx_path)
+            self.slope_session = create_policy_session(slope_onnx_path)
             sl_input_shape = self.slope_session.get_inputs()[0].shape
             print(f"Slope policy input shape: {sl_input_shape}")
 
@@ -334,7 +355,7 @@ class PolicyInference:
                     "command obs (61D); run with --new-cmd-obs"
                 )
             print(f"\nLoading {name} policy from: {path}")
-            self.behavior_sessions[name] = ort.InferenceSession(path)
+            self.behavior_sessions[name] = create_policy_session(path)
             self.behavior_durations[name] = duration
             print(f"{name} policy input shape: {self.behavior_sessions[name].get_inputs()[0].shape}"
                   f"  (auto-return after {duration:.1f}s)")
@@ -1169,6 +1190,10 @@ class OdomAnchorOverlay:
 
 def main():
     parser = argparse.ArgumentParser(description="Run ONNX policy in MuJoCo")
+    parser.add_argument("--keyboard", choices=("terminal", "viewer"), default="terminal",
+                        help="Where movement keys are read (viewer: arrows and space)")
+    parser.add_argument("--timing", action="store_true", help="Print simulation speed every 250 steps")
+    parser.add_argument("--follow-camera", action="store_true", help="Start with the camera tracking MicroDuck")
     parser.add_argument("--roller", action="store_true", help="Use roller skate robot XML (robot_walk_rollers.xml)")
     parser.add_argument("--scene", type=str, default=None, help="Path to a scene XML, overriding the default pick (e.g. src/mjlab_microduck/robot/microduck/scene_allcollisions.xml)")
     parser.add_argument("--walking", type=str, default=None, help="Path to walking policy ONNX file")
@@ -1607,41 +1632,54 @@ def main():
         except Exception as e:
             print(f"Key press error: {e}")
 
-    print("\nKeyboard controls (type in THIS terminal — the viewer window no longer captures keys):")
-    print("  [ Velocity mode (default) ]")
-    print("  UP arrow:         increase lin_vel_x (push/accelerate)")
-    print("  DOWN arrow:       decrease lin_vel_x (0=coast, negative=brake)")
-    if args.roller:
-        print("  LEFT/RIGHT arrow: turn left/right (ang_vel_z heading error)")
-        print("  A / E:            turn left/right (ang_vel_z, incremental)")
+    if args.keyboard == "viewer":
+        print("\nClick the MuJoCo window: UP/DOWN move, LEFT/RIGHT turn, SPACE stops.")
+        print("Close the viewer to quit. Use --keyboard terminal for advanced controls.")
     else:
-        print("  LEFT/RIGHT arrow: strafe left/right (lin_vel_y)")
-        print("  A / E:            turn left/right (ang_vel_z)")
-    print("  SPACE:            coast (zero all commands)")
-    print("  T:                toggle policy inference on/off (paused = motors hold last target)")
-    print("  G:                trigger ground pick (requires --ground-pick)")
-    print("  Y:                toggle sit (with --sit/--sitstand) or slope mode (with --slope)")
-    print("  K:                kick with LEFT foot (requires --kick-left)")
-    print("  L:                kick with RIGHT foot (requires --kick-right)")
-    print("  R:                roulade / forward roll (requires --roulade)")
-    print(f"  P:                random push (trunk vel = {PUSH_MAX:.1f} m/s in random direction)")
-    print("  Q:                quit")
-    print("  [ Body pose mode — press B to toggle ]")
-    print(f"  UP/DOWN arrow:    Δz ±10mm  (max ±{BODY_CMD_MAX_Z*1000:.0f}mm)")
-    print(f"  LEFT/RIGHT arrow: Δpitch ±10°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
-    print(f"  A / E:            Δroll ±10°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
-    if args.new_cmd_obs:
-        print(f"  Z / S:            Δyaw ±10°  (new_cmd_obs only, max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
-    print("  SPACE:            reset body pose to zero")
-    print("  [ Head mode — press H to toggle ]")
-    print("  Z / S:            neck_pitch ±step")
-    print("  UP/DOWN arrow:    head_pitch ±step")
-    print("  LEFT/RIGHT arrow: head_yaw ±step")
-    print("  A / E:            head_roll ±step")
-    print("  SPACE:            reset head offset to zero")
+        print("\nKeyboard controls (type in THIS terminal — the viewer window no longer captures keys):")
+        print("  [ Velocity mode (default) ]")
+        print("  UP arrow:         increase lin_vel_x (push/accelerate)")
+        print("  DOWN arrow:       decrease lin_vel_x (0=coast, negative=brake)")
+        if args.roller:
+            print("  LEFT/RIGHT arrow: turn left/right (ang_vel_z heading error)")
+            print("  A / E:            turn left/right (ang_vel_z, incremental)")
+        else:
+            print("  LEFT/RIGHT arrow: strafe left/right (lin_vel_y)")
+            print("  A / E:            turn left/right (ang_vel_z)")
+        print("  SPACE:            coast (zero all commands)")
+        print("  T:                toggle policy inference on/off (paused = motors hold last target)")
+        print("  G:                trigger ground pick (requires --ground-pick)")
+        print("  Y:                toggle sit (with --sit/--sitstand) or slope mode (with --slope)")
+        print("  K:                kick with LEFT foot (requires --kick-left)")
+        print("  L:                kick with RIGHT foot (requires --kick-right)")
+        print("  R:                roulade / forward roll (requires --roulade)")
+        print(f"  P:                random push (trunk vel = {PUSH_MAX:.1f} m/s in random direction)")
+        print("  Q:                quit")
+        print("  [ Body pose mode — press B to toggle ]")
+        print(f"  UP/DOWN arrow:    Δz ±10mm  (max ±{BODY_CMD_MAX_Z*1000:.0f}mm)")
+        print(f"  LEFT/RIGHT arrow: Δpitch ±10°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
+        print(f"  A / E:            Δroll ±10°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
+        if args.new_cmd_obs:
+            print(f"  Z / S:            Δyaw ±10°  (new_cmd_obs only, max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
+        print("  SPACE:            reset body pose to zero")
+        print("  [ Head mode — press H to toggle ]")
+        print("  Z / S:            neck_pitch ±step")
+        print("  UP/DOWN arrow:    head_pitch ±step")
+        print("  LEFT/RIGHT arrow: head_yaw ±step")
+        print("  A / E:            head_roll ±step")
+        print("  SPACE:            reset head offset to zero")
 
-    with TerminalInput() as term, \
-         mujoco.viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False) as viewer:
+    with TerminalInput(viewer_keys=args.keyboard == "viewer") as term, \
+         mujoco.viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False,
+                                     key_callback=term.on_viewer_key if args.keyboard == "viewer" else None) as viewer:
+        if args.follow_camera:
+            with viewer.lock():
+                viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+                viewer.cam.trackbodyid = policy.trunk_base_id
+                viewer.cam.lookat[:] = data.subtree_com[policy.trunk_base_id]
+                viewer.cam.distance = 0.8
+                viewer.cam.elevation = -20
+            print("Camera follows MicroDuck. Esc: free camera; Ctrl + right-double-click duck: follow.")
         odom_overlay = OdomAnchorOverlay(model, load_odom_anchor_sets(args.odom_anchor_points)) \
             if args.odom_anchor_points else None
         odom_compare = OdomCompare(model, load_odom_anchor_sets()) if args.odom_compare else None
@@ -1658,6 +1696,8 @@ def main():
 
         try:
             prev_step_time = time.time()
+            timing_wall = time.perf_counter()
+            timing_sim = data.time
 
             while viewer.is_running() and not quit_requested:
                 step_start = time.time()
@@ -1788,6 +1828,12 @@ def main():
                 sleep_time = control_dt - elapsed
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+                if args.timing and control_step_count % 250 == 0:
+                    wall_now = time.perf_counter()
+                    wall_dt = wall_now - timing_wall
+                    print(f"[timing] {250 / wall_dt:.1f} control Hz; "
+                          f"{(data.time - timing_sim) / wall_dt:.3f}x real time")
+                    timing_wall, timing_sim = wall_now, data.time
 
         except KeyboardInterrupt:
             print("\n\nKeyboardInterrupt received (Ctrl+C). Saving data...")
