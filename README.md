@@ -1,3 +1,19 @@
+# MicroDuck learning project
+
+A personal learning and experiment repository based on
+[pollen-robotics/microduck_rl](https://github.com/pollen-robotics/microduck_rl).
+The robot assets, training tasks, and PPO integration originate upstream; the
+local additions cover interactive playback, checkpoint evaluation, and CPU/Warp
+deployment diagnostics.
+
+**Start here:** [Learning notes, evidence, and reproduction limits](docs/learning/README.md).
+
+The latest recorded evaluation found remaining CPU/Warp contact-physics differences.
+It does not establish real-robot readiness or superiority over the official policy.
+Model checkpoints, virtual environments, and full training logs are excluded.
+Upstream code and model licenses remain in `LICENSE` and `LICENSE-MODELS.md`.
+
+---
 # Microduck RL
 
 <img width="2215" height="884" alt="image" src="https://github.com/user-attachments/assets/5db7cc83-b3ce-4f7c-83f0-0572a63baed7" />

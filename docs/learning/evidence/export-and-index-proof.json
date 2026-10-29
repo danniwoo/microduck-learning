@@ -1,0 +1,12 @@
+{
+  "samples": 960,
+  "cpu_torch_vs_onnx_max_abs": 1.1920928955078125e-06,
+  "cpu_torch_vs_onnx_mean_abs": 1.0163805086449429e-07,
+  "minimal_friction_constraint": {
+    "hinge_joint_id": 1,
+    "hinge_dof_id": 6,
+    "efc_friction_ids": [
+      6
+    ]
+  }
+}

@@ -38,3 +38,11 @@ backup_onnx/
 logdir/.claude/
 logdir/
 logdir/.claude/worktrees/
+
+# Local credentials and generated deployment artifacts
+.env
+.env.*
+!.env.example
+*.mjb
+*.log
+policies/
